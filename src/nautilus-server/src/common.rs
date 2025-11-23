@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serde_repr::Deserialize_repr;
 use serde_repr::Serialize_repr;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -148,68 +149,66 @@ pub async fn health_check(
         .map_err(|e| EnclaveError::GenericError(format!("Failed to create HTTP client: {e}")))?;
 
     // Load allowed endpoints from YAML file
-    let endpoints_status = match std::fs::read_to_string("allowed_endpoints.yaml") {
-        Ok(yaml_content) => {
-            match serde_yaml::from_str::<serde_yaml::Value>(&yaml_content) {
-                Ok(yaml_value) => {
-                    let mut status_map = HashMap::new();
+    let endpoints_status = match load_allowed_endpoints_yaml() {
+        Some(yaml_content) => match serde_yaml::from_str::<serde_yaml::Value>(&yaml_content) {
+            Ok(yaml_value) => {
+                let mut status_map = HashMap::new();
 
-                    if let Some(endpoints) =
-                        yaml_value.get("endpoints").and_then(|e| e.as_sequence())
-                    {
-                        for endpoint in endpoints {
-                            if let Some(endpoint_str) = endpoint.as_str() {
-                                // Check connectivity to each endpoint
-                                let url = if endpoint_str.contains(".amazonaws.com") {
-                                    format!("https://{endpoint_str}/ping")
-                                } else {
-                                    format!("https://{endpoint_str}")
-                                };
+                if let Some(endpoints) =
+                    yaml_value.get("endpoints").and_then(|e| e.as_sequence())
+                {
+                    for endpoint in endpoints {
+                        if let Some(endpoint_str) = endpoint.as_str() {
+                            // Check connectivity to each endpoint
+                            let url = if endpoint_str.contains(".amazonaws.com") {
+                                format!("https://{endpoint_str}/ping")
+                            } else {
+                                format!("https://{endpoint_str}")
+                            };
 
-                                let is_reachable = match client.get(&url).send().await {
-                                    Ok(response) => {
-                                        if endpoint_str.contains(".amazonaws.com") {
-                                            // For AWS endpoints, check if response body contains "healthy"
-                                            match response.text().await {
-                                                Ok(body) => body.to_lowercase().contains("healthy"),
-                                                Err(e) => {
-                                                    info!(
-                                                        "Failed to read response body from {}: {}",
-                                                        endpoint_str, e
-                                                    );
-                                                    false
-                                                }
+                            let is_reachable = match client.get(&url).send().await {
+                                Ok(response) => {
+                                    if endpoint_str.contains(".amazonaws.com") {
+                                        // For AWS endpoints, check if response body contains "healthy"
+                                        match response.text().await {
+                                            Ok(body) => body.to_lowercase().contains("healthy"),
+                                            Err(e) => {
+                                                info!(
+                                                    "Failed to read response body from {}: {}",
+                                                    endpoint_str, e
+                                                );
+                                                false
                                             }
-                                        } else {
-                                            // For non-AWS endpoints, check for 200 status
-                                            response.status().is_success()
                                         }
+                                    } else {
+                                        // For non-AWS endpoints, check for 200 status
+                                        response.status().is_success()
                                     }
-                                    Err(e) => {
-                                        info!("Failed to connect to {}: {}", endpoint_str, e);
-                                        false
-                                    }
-                                };
+                                }
+                                Err(e) => {
+                                    info!("Failed to connect to {}: {}", endpoint_str, e);
+                                    false
+                                }
+                            };
 
-                                status_map.insert(endpoint_str.to_string(), is_reachable);
-                                info!(
-                                    "Checked endpoint {}: reachable = {}",
-                                    endpoint_str, is_reachable
-                                );
-                            }
+                            status_map.insert(endpoint_str.to_string(), is_reachable);
+                            info!(
+                                "Checked endpoint {}: reachable = {}",
+                                endpoint_str, is_reachable
+                            );
                         }
                     }
+                }
 
-                    status_map
-                }
-                Err(e) => {
-                    info!("Failed to parse YAML: {}", e);
-                    HashMap::new()
-                }
+                status_map
             }
-        }
-        Err(e) => {
-            info!("Failed to read allowed_endpoints.yaml: {}", e);
+            Err(e) => {
+                info!("Failed to parse allowed_endpoints.yaml: {}", e);
+                HashMap::new()
+            }
+        },
+        None => {
+            info!("allowed_endpoints.yaml not found; skipping connectivity checks");
             HashMap::new()
         }
     };
@@ -218,4 +217,31 @@ pub async fn health_check(
         pk: Hex::encode(pk.as_bytes()),
         endpoints_status,
     }))
+}
+
+fn load_allowed_endpoints_yaml() -> Option<Cow<'static, str>> {
+    if let Ok(contents) = std::fs::read_to_string("allowed_endpoints.yaml") {
+        return Some(Cow::Owned(contents));
+    }
+
+    built_in_allowed_endpoints().map(Cow::Borrowed)
+}
+
+fn built_in_allowed_endpoints() -> Option<&'static str> {
+    #[cfg(feature = "weather-example")]
+    {
+        return Some(include_str!("apps/weather-example/allowed_endpoints.yaml"));
+    }
+
+    #[cfg(feature = "twitter-example")]
+    {
+        return Some(include_str!("apps/twitter-example/allowed_endpoints.yaml"));
+    }
+
+    #[cfg(feature = "seal-example")]
+    {
+        return Some(include_str!("apps/seal-example/allowed_endpoints.yaml"));
+    }
+
+    None
 }

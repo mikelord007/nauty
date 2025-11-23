@@ -2,7 +2,7 @@ REGISTRY := local
 
 .DEFAULT_GOAL :=
 .PHONY: default
-default: out/nitro.eif
+default: docker-clean out/nitro.eif
 
 out:
 	mkdir -p out
@@ -38,4 +38,9 @@ run-debug: out/nitro.eif
 .PHONY: update
 update:
 	./update.sh
+
+.PHONY: docker-clean
+docker-clean:
+	docker builder prune --force
+	docker image prune --filter "dangling=true" --force
 
