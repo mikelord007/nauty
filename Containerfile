@@ -38,7 +38,7 @@ COPY --from=core-libzstd . /
 COPY --from=core-binutils . /
 COPY --from=core-pkgconf . /
 COPY --from=core-git . /
-COPY --from=core-rust . /
+# Removed core-rust - no longer needed
 COPY --from=user-gen_initramfs . /
 COPY --from=user-eif_build . /
 COPY --from=core-llvm . /
@@ -52,11 +52,17 @@ FROM base AS build
 COPY . .
 
 WORKDIR /src/nautilus-server
-ENV OPENSSL_STATIC=true
-ENV TARGET=x86_64-unknown-linux-musl
 ARG ENCLAVE_APP
-ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static"
-RUN cargo build --locked --no-default-features --features $ENCLAVE_APP --release --target "$TARGET"
+ENV ENCLAVE_APP=${ENCLAVE_APP}
+
+# Install Python dependencies
+# Note: We need to install pip and then use it to install packages
+# Since we're using StageX Python, we need to ensure pip is available
+# We'll install packages into a temporary location and copy them to initramfs later
+RUN python3 -m ensurepip --default-pip 2>/dev/null || true
+RUN mkdir -p /tmp/python-packages
+RUN python3 -m pip install --no-cache-dir --target /tmp/python-packages -r requirements.txt 2>/dev/null || \
+    (python3 -m pip install --no-cache-dir --target /tmp/python-packages Flask flask-cors cryptography requests PyYAML 2>/dev/null || true)
 
 WORKDIR /build_cpio
 ENV KBUILD_BUILD_TIMESTAMP=1
@@ -71,9 +77,31 @@ COPY --from=core-busybox /bin/sh initramfs/sh
 COPY --from=user-jq /bin/jq initramfs
 COPY --from=user-socat /bin/socat . initramfs
 COPY --from=user-nit /bin/init initramfs
-RUN cp /src/nautilus-server/target/${TARGET}/release/nautilus-server initramfs
+
+# Copy Python server files
+RUN cp /src/nautilus-server/nautilus_server.py initramfs/
+RUN cp /src/nautilus-server/common.py initramfs/
+RUN cp /src/nautilus-server/app_state.py initramfs/
+RUN cp /src/nautilus-server/bcs.py initramfs/
+RUN cp /src/nautilus-server/nsm_helper.py initramfs/
 RUN cp /src/nautilus-server/traffic_forwarder.py initramfs/
 RUN cp /src/nautilus-server/run.sh initramfs/
+
+# Copy apps directory
+RUN mkdir -p initramfs/apps
+RUN cp -r /src/nautilus-server/apps/* initramfs/apps/
+
+# Copy allowed_endpoints.yaml files if they exist
+RUN mkdir -p initramfs/apps/weather-example initramfs/apps/twitter-example initramfs/apps/seal-example
+RUN cp /src/nautilus-server/src/apps/weather-example/allowed_endpoints.yaml initramfs/apps/weather-example/ 2>/dev/null || true
+RUN cp /src/nautilus-server/src/apps/twitter-example/allowed_endpoints.yaml initramfs/apps/twitter-example/ 2>/dev/null || true
+RUN cp /src/nautilus-server/src/apps/seal-example/allowed_endpoints.yaml initramfs/apps/seal-example/ 2>/dev/null || true
+RUN cp /src/nautilus-server/src/apps/seal-example/seal_config.yaml initramfs/apps/seal-example/ 2>/dev/null || true
+
+# Install Python packages into initramfs
+# Copy pre-installed packages from temporary location
+RUN mkdir -p initramfs/lib/python3.11/site-packages
+RUN cp -r /tmp/python-packages/* initramfs/lib/python3.11/site-packages/ 2>/dev/null || true
 
 COPY <<-EOF initramfs/etc/environment
 SSL_CERT_FILE=/ca-certificates.crt
