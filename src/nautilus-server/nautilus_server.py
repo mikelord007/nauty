@@ -93,8 +93,20 @@ def process_data_endpoint():
         if not json_data:
             return jsonify({"error": "Invalid JSON"}), 400
         
-        # Parse request
-        req = ProcessDataRequest(**json_data)
+        # Parse request - convert payload dict to appropriate dataclass
+        if ENCLAVE_APP == "weather-example":
+            from apps.weather_example import WeatherRequest
+            payload_obj = WeatherRequest(**json_data.get("payload", {}))
+        elif ENCLAVE_APP == "twitter-example":
+            from apps.twitter_example import UserRequest
+            payload_obj = UserRequest(**json_data.get("payload", {}))
+        elif ENCLAVE_APP == "seal-example":
+            from apps.seal_example import WeatherRequest
+            payload_obj = WeatherRequest(**json_data.get("payload", {}))
+        else:
+            return jsonify({"error": f"Unknown ENCLAVE_APP: {ENCLAVE_APP}"}), 400
+        
+        req = ProcessDataRequest(payload=payload_obj)
         
         # Call app-specific process_data
         result = process_data(state, req)
@@ -124,5 +136,6 @@ def process_data_endpoint():
 
 if __name__ == "__main__":
     # Run on all interfaces, port 3000
-    app.run(host="0.0.0.0", port=3000, threaded=True)
+    # Debug mode enabled but with interactive debugger disabled (requires /dev/shm which isn't available in enclave)
+    app.run(host="0.0.0.0", port=3000, threaded=True, debug=True, use_reloader=False, use_debugger=False)
 

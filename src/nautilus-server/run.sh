@@ -11,11 +11,10 @@
 # - Launches nautilus-server
 
 set -e # Exit immediately if a command exits with a non-zero status
-echo "run.sh script is running"
-export PYTHONPATH=/lib/python3.11:/usr/local/lib/python3.11/lib-dynload:/usr/local/lib/python3.11/site-packages:/lib
+# Determine Python version dynamically
+PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+export PYTHONPATH=/lib/python${PYTHON_VERSION}/site-packages:/lib/python${PYTHON_VERSION}:/usr/local/lib/python${PYTHON_VERSION}/lib-dynload:/usr/local/lib/python${PYTHON_VERSION}/site-packages:/lib
 export LD_LIBRARY_PATH=/lib:$LD_LIBRARY_PATH
-
-echo "Script completed."
 # Assign an IP address to local loopback
 busybox ip addr add 127.0.0.1/32 dev lo
 busybox ip link set dev lo up
@@ -30,8 +29,6 @@ echo "127.0.0.64   api.weatherapi.com" >> /etc/hosts
 
 
 # == ATTENTION: code should be generated here that parses allowed_endpoints.yaml and populate domains here ===
-
-cat /etc/hosts
 
 # Get a json blob with key/value pair for secrets
 JSON_RESPONSE=$(socat - VSOCK-LISTEN:7777,reuseaddr)

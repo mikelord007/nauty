@@ -61,7 +61,7 @@ AMI_ID="${AMI_ID:-ami-085ad6ae776d8f09c}"
 API_ENV_VAR_NAME="${API_ENV_VAR_NAME:-API_KEY}"
 
 ENCLAVE_APP="${1}"
-ALLOWLIST_PATH="src/nautilus-server/src/apps/${ENCLAVE_APP}/allowed_endpoints.yaml"
+ALLOWLIST_PATH="src/nautilus-server/apps/${ENCLAVE_APP}/allowed_endpoints.yaml"
 
 ############################
 # Cleanup Old Files
@@ -448,7 +448,7 @@ cat <<'EOF' > user-data.sh
 #!/bin/bash
 # Update the instance and install Nitro Enclaves tools, Docker and other utilities
 sudo yum update -y
-sudo yum install -y aws-nitro-enclaves-cli-devel aws-nitro-enclaves-cli docker nano socat git make
+sudo yum install -y aws-nitro-enclaves-cli-devel aws-nitro-enclaves-cli docker nano socat git make python3-pip
 
 # Add the current user to the docker group (so you can run docker without sudo)
 sudo usermod -aG docker ec2-user
@@ -674,5 +674,6 @@ echo "[*] Commit the code generated in expose_enclave.sh and src/nautilus-server
 echo "[*] Please wait 2-3 minutes for the instance to finish the init script before sshing into it."
 echo "[*] ssh inside the launched EC2 instance. e.g. \`ssh ec2-user@\"$PUBLIC_IP\"\` assuming the ssh-key is loaded into the agent."
 echo "[*] Clone or copy the repo with the above generated code."
+echo "[*] Install Python dependencies: 'cd nautilus/src/nautilus-server && python3 -m pip install --user -r requirements.txt'"
 echo "[*] Inside repo directory: 'make build ENCLAVE_APP=<APP> && make run'"
 echo "[*] Run expose_enclave.sh from within the EC2 instance to expose the enclave to the internet."

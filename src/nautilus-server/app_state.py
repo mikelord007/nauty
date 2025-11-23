@@ -6,6 +6,7 @@ App state management for the nautilus server.
 """
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.hazmat.backends import default_backend
 import os
 
@@ -28,8 +29,8 @@ class AppState:
     def get_public_key_bytes(self) -> bytes:
         """Get the public key as bytes."""
         return self.eph_public_key.public_bytes(
-            encoding=ed25519.Encoding.Raw,
-            format=ed25519.PublicFormat.Raw
+            encoding=Encoding.Raw,
+            format=PublicFormat.Raw
         )
     
     def get_private_key(self) -> ed25519.Ed25519PrivateKey:

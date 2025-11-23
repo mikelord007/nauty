@@ -88,8 +88,8 @@ def to_signed_response(
     # Serialize IntentMessage to BCS bytes
     signing_payload = to_bytes(intent_msg)
     
-    # Sign with Ed25519
-    signature = private_key.sign(signing_payload, default_backend())
+    # Sign with Ed25519 (no backend parameter needed in newer cryptography versions)
+    signature = private_key.sign(signing_payload)
     
     # Encode signature as hex
     signature_hex = binascii.hexlify(signature).decode('ascii')
@@ -102,7 +102,7 @@ def to_signed_response(
 
 def get_attestation(public_key_bytes: bytes) -> GetAttestationResponse:
     """
-    Get attestation document from NSM.
+    Get attestation document from NSM using Rust helper binary.
     Returns attestation document hex-encoded.
     
     Args:
@@ -115,17 +115,58 @@ def get_attestation(public_key_bytes: bytes) -> GetAttestationResponse:
         EnclaveError: If attestation fails
     """
     try:
-        from nsm_helper import get_attestation_document
-        attestation_doc = get_attestation_document(public_key=public_key_bytes)
+        import subprocess
         
-        if len(attestation_doc) == 0:
+        # Encode public key as hex
+        public_key_hex = binascii.hexlify(public_key_bytes).decode('ascii')
+        
+        # Try to find the Rust helper binary
+        # In enclave: /nsm-attestation-helper
+        # On host: might be in different location
+        helper_paths = [
+            "/nsm-attestation-helper",  # In enclave
+            "nsm-attestation-helper",   # In PATH
+            "./nsm-attestation-helper", # Current directory
+        ]
+        
+        helper_binary = None
+        for path in helper_paths:
+            try:
+                # Check if file exists and is executable
+                if os.path.exists(path) and os.access(path, os.X_OK):
+                    helper_binary = path
+                    break
+            except Exception as e:
+                continue
+        
+        if helper_binary is None:
+            tried_paths = ", ".join(helper_paths)
+            raise EnclaveError(f"NSM attestation helper binary not found at any of: {tried_paths}. Make sure it's built and available.")
+        
+        # Call the Rust helper binary
+        result = subprocess.run(
+            [helper_binary, public_key_hex],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode != 0:
+            error_msg = result.stderr.strip() if result.stderr else f"Helper binary exited with code {result.returncode}"
+            raise EnclaveError(f"NSM attestation failed: {error_msg}")
+        
+        attestation_hex = result.stdout.strip()
+        if not attestation_hex:
             raise EnclaveError("Failed to get attestation document (empty response)")
         
         return GetAttestationResponse(
-            attestation=binascii.hexlify(attestation_doc).decode('ascii')
+            attestation=attestation_hex
         )
-    except FileNotFoundError:
-        raise EnclaveError("NSM device not found. Not running in an enclave?")
+    except FileNotFoundError as e:
+        # This could be the binary not found, or /dev/nsm not found inside the binary
+        raise EnclaveError(f"File not found error during attestation: {str(e)}. Helper binary: {helper_binary if 'helper_binary' in locals() else 'unknown'}")
+    except subprocess.TimeoutExpired:
+        raise EnclaveError("NSM attestation timed out")
     except Exception as e:
         raise EnclaveError(f"Attestation error: {str(e)}")
 
@@ -181,33 +222,49 @@ def health_check(public_key_bytes: bytes) -> HealthCheckResponse:
 
 
 def load_allowed_endpoints_yaml() -> Optional[str]:
-    """Load allowed_endpoints.yaml from file or built-in."""
-    # Try to read from file first
-    if os.path.exists("allowed_endpoints.yaml"):
+    """Load allowed_endpoints.yaml from file or built-in.
+    
+    Tries multiple paths to support both host and enclave environments:
+    - Host: src/nautilus-server/apps/{app}/allowed_endpoints.yaml
+    - Enclave: /apps/{app}/allowed_endpoints.yaml
+    """
+    # Get the directory where this file is located
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Try to read from file first (in current directory)
+    local_path = os.path.join(current_dir, "allowed_endpoints.yaml")
+    if os.path.exists(local_path):
         try:
-            with open("allowed_endpoints.yaml", "r") as f:
+            with open(local_path, "r") as f:
                 return f.read()
         except Exception:
             pass
     
     # Try built-in endpoints based on app feature
-    # This would be set at build time or via environment variable
-    app_name = os.environ.get("ENCLAVE_APP", "")
+    app_name = os.environ.get("ENCLAVE_APP", "weather-example")
     
-    built_in_paths = {
-        "weather-example": "src/nautilus-server/src/apps/weather-example/allowed_endpoints.yaml",
-        "twitter-example": "src/nautilus-server/src/apps/twitter-example/allowed_endpoints.yaml",
-        "seal-example": "src/nautilus-server/src/apps/seal-example/allowed_endpoints.yaml",
-    }
+    # List of paths to try (in order of preference)
+    paths_to_try = []
     
-    if app_name in built_in_paths:
-        path = built_in_paths[app_name]
+    # 1. Enclave path: /apps/{app}/allowed_endpoints.yaml (when running from /)
+    paths_to_try.append(f"/apps/{app_name}/allowed_endpoints.yaml")
+    
+    # 2. Relative from current file: apps/{app}/allowed_endpoints.yaml (host, from src/nautilus-server)
+    paths_to_try.append(os.path.join(current_dir, f"apps/{app_name}/allowed_endpoints.yaml"))
+    
+    # 3. Absolute from repo root: src/nautilus-server/apps/{app}/allowed_endpoints.yaml
+    parent_dir = os.path.dirname(current_dir)  # Should be 'src' when in src/nautilus-server
+    repo_root = os.path.dirname(parent_dir) if parent_dir else current_dir
+    paths_to_try.append(os.path.join(repo_root, f"src/nautilus-server/apps/{app_name}/allowed_endpoints.yaml"))
+    
+    # Try each path
+    for path in paths_to_try:
         if os.path.exists(path):
             try:
                 with open(path, "r") as f:
                     return f.read()
             except Exception:
-                pass
+                continue
     
     return None
 
